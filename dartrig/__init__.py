@@ -1,5 +1,3 @@
-import io
-import zipfile
 import requests
 import logging
 from typing import List
@@ -98,7 +96,7 @@ class DartAPI:
         }
         return requests.get("https://opendart.fss.or.kr/api/list.json", params=param).json()
 
-    def get_document_zip(self, rcp_no):
+    def get_document_zip_bytes(self, rcp_no):
         key = self.keys.next_key()
         logging.info(f"fetching data  rcp_no : {rcp_no}, withkey : {key}")
         param = {
@@ -106,7 +104,7 @@ class DartAPI:
             'rcept_no': rcp_no
         }
         response = requests.get("https://opendart.fss.or.kr/api/document.xml", params=param)
-        return zipfile.ZipFile(io.BytesIO(response.content), "r")
+        return response.content
 
     def disable_key(self, key):
         self.keys.disable_key(key)

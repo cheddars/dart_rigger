@@ -2,11 +2,11 @@ import setuptools
 
 setuptools.setup(
     name="dartrig",
-    version="0.0.2",
+    version="0.0.4",
     license='MIT',
     author="cheddars",
     author_email="nezahrish@gmail.com",
-    description="dart api wrapper",
+    description="dartrig api wrapper",
     long_description=open('README.md').read(),
     url="https://github.com/cheddars/dart_rigger",
     packages=setuptools.find_packages(),
