@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="dartrig",
-    version="0.0.4",
+    version="0.0.5",
     license='MIT',
     author="cheddars",
     author_email="nezahrish@gmail.com",
