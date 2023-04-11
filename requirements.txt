@@ -1,4 +1,5 @@
 requests
+bs4
 
 ##
 adt_cache==0.0.1

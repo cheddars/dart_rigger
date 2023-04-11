@@ -6,17 +6,26 @@ import time
 from typing import List
 from datetime import datetime
 from bs4 import BeautifulSoup
-from cache import AdtCache, MemoryCache
-
+from cache import AdtCache
 from dartrig.annotations import memoize
 
-headers = {
+HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"}
 
+URLS = {
+    "DART_BASE": "https://dart.fss.or.kr",
+    "DART_LIST": "https://dart.fss.or.kr/dsab007/detailSearch.ax",
+    "DART_VIEWER": "https://dart.fss.or.kr/report/viewer.do",
+    "DART_DSAF": "https://dart.fss.or.kr/dsaf001/main.do",
+}
 logger = logging.getLogger("dartrig")
 
 
 class DartWeb:
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.get(URLS["DART_BASE"], headers=HEADERS)
+
     @memoize
     def request_detail(self, rcp_no: str, dtd: str, ele_id: int = 0, offset: int = 0) -> str:
         """
@@ -27,23 +36,22 @@ class DartWeb:
         :return:
         """
         dcm_no = self.get_dcm_no_by_rcp_no(rcp_no)
-        url = f"https://dart.fss.or.kr/report/viewer.do?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
+        url = f"{URLS['DART_VIEWER']}?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
         logger.info(f"request_detail url : {url}")
-        response = requests.get(url, headers=headers)
+        response = self.session.get(url, headers=HEADERS)
         # response.encoding = "UTF-8"
         return response.text
 
     @memoize
     def request_detail_with_dcm(self, rcp_no, dtd, dcm_no, ele_id=0, offset=0):
-        url = f"https://dart.fss.or.kr/report/viewer.do?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
+        url = f"{URLS['DART_VIEWER']}?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
         logger.info(f"request_detail_with_dcm url : {url}")
-        return requests.get(url, headers=headers).text
+        return self.session.get(url, headers=HEADERS).text
 
     @memoize
     def dsaf001_report(self, rcp_no):
         logger.debug(f"dsaf001_report for rcp_no {rcp_no}")
-        html_text = requests.get(f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcp_no}", headers=headers).text
-        return html_text
+        return self.session.get(f"{URLS['DART_DSAF']}?rcpNo={rcp_no}", headers=HEADERS).text
 
     @memoize
     def get_dcm_no_by_rcp_no(self, rcp_no):
@@ -67,8 +75,8 @@ class DartWeb:
         :return: (content_type, content)
         """
         dcm_no = self.get_dcm_no_by_rcp_no(rcp_no)
-        url = f"https://dart.fss.or.kr/report/viewer.do?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
-        response = requests.get(url, headers=headers)
+        url = f"{URLS['DART_VIEWER']}?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
+        response = self.session.get(url, headers=HEADERS)
         content_type = response.headers.get("Content-Type")
         return content_type, response.content
 
@@ -100,11 +108,8 @@ class DartWeb:
             'closingAccountsMonth': 'all',
             'tocSrch2': ''
         }
-        headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 "
-                          "Safari/537.36"}
 
-        return requests.post('https://dart.fss.or.kr/dsab007/detailSearch.ax', data=data, headers=headers)
+        return self.session.post(URLS["DART_LIST"], data=data, headers=HEADERS)
 
 
 class DartAPI:
@@ -154,7 +159,8 @@ class DartAPI:
             elif status == '101':
                 logger.error(f"{status} 부적절한 접근입니다.")
             elif status == '800':
-                logger.error(f"{status} 조회 가능한 회사 개수가 초과하였습니다.(최대 100건)")
+                logger.error(f"{status} 시스템 점검으로 인한 서비스가 중지 중입니다.")
+                break
             elif status == '900':
                 logger.error(f"{status} 정의되지 않은 오류가 발생하였습니다.")
             elif status == '901':
@@ -205,16 +211,17 @@ class DartAPI:
         list_items = []
 
         for item in results:
-            # 각 항목별로 데이터 추출
-            rcept_dt = item.get('rcept_dt', '')
 
+            # 각 항목별로 데이터 추출
             data = {
                 "company": item.get('corp_name', ''),
                 "market": item.get('corp_cls', ''),
                 "title": item.get('report_nm', ''),
                 "code": item.get('stock_code', ''),
                 "rcp_no": item.get('rcept_no', ''),
-                "rcept_dt": rcept_dt[:4] + '.' + rcept_dt[4:6] + '.' + rcept_dt[6:],
+                "rcept_dt": item.get('rcept_dt', ''),
+                "remark": item.get('rm', ''),
+                "flr_nm": item.get('flr_nm', ''),
             }
             list_items.append(data)
 
@@ -241,13 +248,15 @@ class DartAPI:
         response = requests.get("https://opendart.fss.or.kr/api/document.xml", params=param)
         content_type = response.headers.get("Content-Type")
         if "xml" in content_type:
+            logger.info(f"rcp_no : {rcp_no} Content-Type is XML")
             try:
                 soup = BeautifulSoup(response.text, "html.parser")
                 status = soup.find("status").text
                 message = soup.find("message").text
-                print(f"status : [{status}], message : {message}")
+                logger.info(f"status : [{status}], message : {message}")
             except Exception as ex:
                 traceback.print_exc()
+                logger.error(ex)
             return None
         else:
             return response.content
