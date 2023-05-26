@@ -6,8 +6,8 @@ import time
 from typing import List
 from datetime import datetime
 from bs4 import BeautifulSoup
-from cache import AdtCache
-from dartrig.annotations import memoize
+from cache import AdtCache, MemoryCache
+from cache.filecache import FileCache
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"}
@@ -22,11 +22,21 @@ logger = logging.getLogger("dartrig")
 
 
 class DartWeb:
-    def __init__(self):
+    def __init__(self, cache: AdtCache = None, file_cache: FileCache = None):
+        self.logger = logging.getLogger("dart_web")
         self.session = requests.Session()
         self.session.get(URLS["DART_BASE"], headers=HEADERS)
 
-    @memoize
+        if cache is None:
+            self.logger.info("Cache is not provided. Use MemoryCache")
+            cache = MemoryCache()
+
+        self.cache: AdtCache = cache
+
+        self.file_cache = file_cache
+        if self.file_cache is not None:
+            self.logger.info(f"File cache is enabled. Cache directory: {file_cache.base_dir}")
+
     def request_detail(self, rcp_no: str, dtd: str, ele_id: int = 0, offset: int = 0) -> str:
         """
         :param rcp_no:
@@ -35,35 +45,56 @@ class DartWeb:
         :param offset:
         :return:
         """
-        dcm_no = self.get_dcm_no_by_rcp_no(rcp_no)
+        dcm_no = self._get_dcm_no_by_rcp_no(rcp_no)
+        return self._request_detail_with_dcm(rcp_no, dtd, dcm_no, ele_id, offset)
+
+    def _try_file_cache_request(self, url, prefix, file_cache_key):
+        if self.file_cache is not None:
+            cached = self.file_cache.get_file(prefix=prefix, key=file_cache_key, ext="html")
+            if cached is not None:
+                self.logger.debug(f"file cache hit for key {file_cache_key}")
+                return cached
+
+        text = self.session.get(url, headers=HEADERS).text
+        self.logger.debug(f"_try_file_cache_request response text : {text}")
+
+        if self.file_cache is not None:
+            self.file_cache.save_file(prefix=prefix, key=file_cache_key, ext="html", data=text)
+            self.logger.debug(f"file cache set for key {file_cache_key}")
+        return text
+
+    def _request_detail_with_dcm(self, rcp_no, dtd, dcm_no, ele_id=0, offset=0):
+        file_cache_key = f"{rcp_no}_{dcm_no}_{dtd}_{ele_id}_{offset}"
+
         url = f"{URLS['DART_VIEWER']}?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
-        logger.info(f"request_detail url : {url}")
-        response = self.session.get(url, headers=HEADERS)
-        # response.encoding = "UTF-8"
-        return response.text
+        self.logger.info(f"request_detail_with_dcm url : {url}")
+        return self._try_file_cache_request(url, "viewer", file_cache_key)
 
-    @memoize
-    def request_detail_with_dcm(self, rcp_no, dtd, dcm_no, ele_id=0, offset=0):
-        url = f"{URLS['DART_VIEWER']}?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
-        logger.info(f"request_detail_with_dcm url : {url}")
-        return self.session.get(url, headers=HEADERS).text
-
-    @memoize
-    def dsaf001_report(self, rcp_no):
-        logger.debug(f"dsaf001_report for rcp_no {rcp_no}")
-        return self.session.get(f"{URLS['DART_DSAF']}?rcpNo={rcp_no}", headers=HEADERS).text
-
-    @memoize
-    def get_dcm_no_by_rcp_no(self, rcp_no):
+    def _get_dcm_no_by_rcp_no(self, rcp_no):
+        cache_key = f"dcm_no_{rcp_no}"
         try:
-            html_text = self.dsaf001_report(rcp_no)
+            if self.cache is not None:
+                cached = self.cache.get(cache_key)
+                if cached is not None:
+                    logger.debug(f"dsaf001_report cache hit for rcp_no {rcp_no}")
+                    return cached
+
+            url = f"{URLS['DART_DSAF']}?rcpNo={rcp_no}"
+            html_text = self._try_file_cache_request(url, "dsaf", rcp_no)
             numbers = re.findall("\d{7}", html_text)
             dcm_no = numbers[2]
+
+            if self.cache is not None:
+                self.cache.set(cache_key, dcm_no)
+                logger.debug(f"dsaf001_report cache set for rcp_no {rcp_no}")
         except Exception as ex:
             logger.exception(ex)
             raise ValueError(f"dcm number fetch failed for rcp_no : [{rcp_no}]")
 
         return dcm_no
+
+    def _deprecated_get_dsaf_html(self, rcp_no):
+        return self.session.get(f"{URLS['DART_DSAF']}?rcpNo={rcp_no}", headers=HEADERS).text
 
     def get_document(self, rcp_no, dtd, ele_id=0, offset=0):
         """
@@ -74,7 +105,7 @@ class DartWeb:
         :param offset:
         :return: (content_type, content)
         """
-        dcm_no = self.get_dcm_no_by_rcp_no(rcp_no)
+        dcm_no = self._get_dcm_no_by_rcp_no(rcp_no)
         url = f"{URLS['DART_VIEWER']}?rcpNo={rcp_no}&dcmNo={dcm_no}&eleId={ele_id}&offset={offset}&length=0&dtd={dtd}"
         response = self.session.get(url, headers=HEADERS)
         content_type = response.headers.get("Content-Type")
@@ -181,7 +212,8 @@ class DartAPI:
                 keys = [x.get("rcept_no") for x in response_items]
                 diff = self.cache.differential(cache_key, keys)
                 logger.debug(f"diff : {diff}, cached keys : {len(self.cache.keys())}")
-                diff_ratio = float(len(diff)) / float(len(response_items)) * 100
+                diff_ratio = float(len(diff)) / float(len(response_items)) * 100 if len(response_items) > 0 else float(0)
+
                 if diff_ratio == float(0):
                     logger.info(f"diff ratio is {diff_ratio}% => break")
                     break
@@ -200,18 +232,21 @@ class DartAPI:
             else:
                 results.extend(response_items)
 
+                logger.info(f"pause {pause} secs for continue")
+                time.sleep(pause)
+
             if total_page == page_no:
                 logger.info(f"total page reached {total_page}")
                 break
 
-            if max_page >= page_no:
+            if max_page <= page_no:
                 logger.info(f"max page reached {max_page}")
                 break
 
         list_items = []
 
         for item in results:
-
+            logger.debug(f"item : {item}")
             # 각 항목별로 데이터 추출
             data = {
                 "company": item.get('corp_name', ''),

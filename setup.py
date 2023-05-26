@@ -2,7 +2,12 @@ import setuptools
 
 setuptools.setup(
     name="dartrig",
-    version="0.0.8",
+    version="0.1.2",
+    install_requires=[
+        'requests',
+        'bs4',
+        'adt_cache==0.0.11'
+    ],
     license='MIT',
     author="cheddars",
     author_email="nezahrish@gmail.com",
