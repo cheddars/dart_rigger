@@ -1,5 +1,8 @@
 requests
 bs4
+pandas
+redis
 
 ##
-adt_cache==0.0.11
+adt_cache==0.0.14
+crawler_commons==0.0.54
