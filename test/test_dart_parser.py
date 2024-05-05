@@ -1,6 +1,6 @@
 import unittest
 
-from dartrig.parser import extract_nodes, extract_node
+from dartrig.parser_dsaf import extract_nodes, extract_node
 
 
 class DartParserTest(unittest.TestCase):

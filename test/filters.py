@@ -1,6 +1,6 @@
 from typing import List
 
-from dartrig.parser import DsafNode
+from dartrig.parser.parser_dsaf import DsafNode
 
 TITLE_WHITELIST = [
     "최대주주",

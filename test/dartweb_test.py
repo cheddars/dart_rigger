@@ -15,6 +15,13 @@ BASE_DIR = "/Users/nezah/ws/projects/disclosure-squeezer/mgmt_data_archive/dart"
 
 
 class TestDartWeb(unittest.TestCase):
+
+    def test_search(self):
+        dartweb = DartWeb()
+
+        r = dartweb.search_report(1, "20240503", "20240503", srch_txt="")
+        print(r.text)
+
     def test_list(self):
         dartweb = DartWeb()
 

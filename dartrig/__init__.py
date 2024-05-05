@@ -7,7 +7,8 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from cache import AdtCache, MemoryCache
 from cache.filecache import FileCache
-from dartrig.parser import extract_nodes, parse_dsaf, is_financial_company, DsafNode
+from dartrig.parser.parser_dsaf import extract_nodes, parse_dsaf, is_financial_company, DsafNode
+from dartrig.parser.parser_search import SearchResult
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"}
@@ -234,7 +235,45 @@ class DartWeb:
         content_type = response.headers.get("Content-Type")
         return content_type, response.content
 
-    def search_report(self, num, start, end, srch_txt):
+    def search_report(self, start, end, srch_txt, loop_sleep=0.5):
+        """
+        :param start: 기간(시작)
+        :param end: 기간(종료)
+        :param srch_txt: 검색어(보고서명)
+        :return:
+        """
+        cache_key = f"search_report_{start}_{end}_{srch_txt}"
+
+        all_items = []
+
+        page = 1
+        while True:
+            r = self._search_report(page, start, end, srch_txt)
+            total_page = r.total_page
+            items = r.items
+            logger.info(f"fetched : [{len(items)}], total_page : {page}/{total_page}")
+            diff = self.cache.differential(cache_key, [x.rcp_no for x in items])
+            if len(diff) == 0:
+                logger.info("diff is 0 => break")
+                break
+
+            all_items.extend([x for x in items if x.rcp_no in diff])
+            self.cache.push_values(cache_key, diff)
+            page = page + 1
+            if page > total_page:
+                break
+            time.sleep(loop_sleep)
+        return all_items
+
+    def _search_report(self, num, start, end, srch_txt) -> SearchResult:
+        """
+
+        :param num: 페이지
+        :param start: 기간(시작)
+        :param end: 기간(종료)
+        :param srch_txt: 검색어(보고서명)
+        :return:
+        """
         data = {
             'currentPage': str(num),
             'maxResults': '100',
@@ -248,7 +287,7 @@ class DartWeb:
             'textkeyword': '',
             'businessCode': 'all',
             'autoSearch': 'N',
-            'option': 'report',
+            'option': 'corp',
             'textCrpNm': '',
             'reportName': srch_txt,
             'tocSrch': '',
@@ -260,10 +299,24 @@ class DartWeb:
             'businessNm': '전체',
             'corporationType': 'all',
             'closingAccountsMonth': 'all',
-            'tocSrch2': ''
+            'tocSrch2': '',
+            'publicType': ['A001', 'A002', 'A003', 'A005', 'A004',
+                           'B001', 'B002', 'B003',
+                           'C001', 'C002', 'C003', 'C004', 'C005', 'C006', 'C007', 'C008', 'C009', 'C010', 'C011',
+                           'D001', 'D004', 'D003', 'D002', 'E001', 'E002', 'E003', 'E004', 'E005', 'E006', 'E007',
+                           'E008', 'E009', 'F001', 'F002', 'F003', 'F004', 'F005', 'G001', 'G002', 'G003', 'H001',
+                           'H002', 'H003', 'H004', 'H005', 'H006', 'I001', 'I002', 'I003', 'I004', 'I005', 'I006',
+                           'J001', 'J008', 'J002', 'J004', 'J005', 'J009', 'J006'
+            ]
         }
 
-        return self.session.post(URLS["DART_LIST"], data=data, headers=HEADERS)
+        res = self.session.post(URLS["DART_LIST"], data=data, headers=HEADERS)
+        if res.status_code == 200:
+            sr = SearchResult.parse(res.text)
+            return sr
+        else:
+            raise ValueError(f"status code is {res.status_code}")
+
 
 
 class DartAPI:
@@ -338,7 +391,7 @@ class DartAPI:
                 diff_ratio = float(len(diff)) / float(len(response_items)) * 100 if len(response_items) > 0 else float(0)
 
                 if diff_ratio == float(0):
-                    logger.info(f"diff ratio is {diff_ratio}% => break")
+                    logger.debug(f"diff ratio is {diff_ratio}% => break")
                     break
                 else:
                     logging.info(f"diff ratio is {diff_ratio}%")
@@ -346,7 +399,7 @@ class DartAPI:
                     self.cache.push_values(cache_key, keys)
 
                     if diff_ratio < 80:
-                        logger.info(f"break")
+                        logger.debug(f"break")
                         break
                     else:
                         logger.info(f"pause {pause} secs for continue")
