@@ -28,4 +28,4 @@ class DartAPITest(unittest.TestCase):
         #cache = RedisCache(host="localhost", port=6380, db=0, expire_mins=60*24, clear_cache=True)
         cache = MemoryCache()
         dartapi = DartAPI(keys=[key], cache=cache)
-
+        dartapi.get_corp_info()

@@ -2,3 +2,4 @@
 /dart_rigger.egg-info/
 dist/
 /conf.ini
+test/config.ini

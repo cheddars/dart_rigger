@@ -1,3 +1,9 @@
+import io
+
+import zipfile
+
+from io import StringIO
+
 import requests
 import logging
 import traceback
@@ -8,14 +14,17 @@ from bs4 import BeautifulSoup
 from cache import AdtCache, MemoryCache
 from cache.filecache import FileCache
 from dartrig.parser.parser_dsaf import extract_nodes, parse_dsaf, is_financial_company, DsafNode
-from dartrig.parser.parser_search import SearchResult
+from dartrig.parser.parser_search import SearchResult, SearchNode, SearchRecentResult
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36"}
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36",
+    # "Accept-Encoding": "deflate, compress, gzip"
+}
 
 URLS = {
     "DART_BASE": "https://dart.fss.or.kr",
     "DART_LIST": "https://dart.fss.or.kr/dsab007/detailSearch.ax",
+    "DART_RECENT_LIST": "https://dart.fss.or.kr/dsac001/search.ax",
     "DART_VIEWER": "https://dart.fss.or.kr/report/viewer.do",
     "DART_DSAF": "https://dart.fss.or.kr/dsaf001/main.do",
 }
@@ -235,7 +244,7 @@ class DartWeb:
         content_type = response.headers.get("Content-Type")
         return content_type, response.content
 
-    def search_report(self, start, end, srch_txt, loop_sleep=0.5):
+    def search_report(self, start, end, srch_txt, loop_sleep=0.5) -> List[SearchNode]:
         """
         :param start: 기간(시작)
         :param end: 기간(종료)
@@ -317,6 +326,59 @@ class DartWeb:
         else:
             raise ValueError(f"status code is {res.status_code}")
 
+    def search_recent_report(self, dt, loop_sleep=0.5) -> List[SearchNode]:
+        """
+        :param dt: 검색일 YYYY.MM.DD
+        :return:
+        """
+        cache_key = f"search_recent_report_{dt.replace('.', '')}"
+
+        all_items = []
+
+        page = 1
+        while True:
+            r = self._search_recent_report(page, dt)
+            total_page = r.total_page
+            items = r.items
+            logger.info(f"fetched : [{len(items)}], total_page : {page}/{total_page}")
+            diff = self.cache.differential(cache_key, [x.rcp_no for x in items])
+            if len(diff) == 0:
+                logger.info("diff is 0 => break")
+                break
+
+            all_items.extend([x for x in items if x.rcp_no in diff])
+            self.cache.push_values(cache_key, diff)
+            page = page + 1
+            if page > total_page:
+                break
+            time.sleep(loop_sleep)
+        return all_items
+
+    def _search_recent_report(self, num, dt) -> SearchResult:
+        """
+        최근 공시
+        :param num: 페이지
+        :param dt: 검색일  YYYY.MM.DD
+        :return:
+        """
+        data = {
+            'currentPage': num,
+            'maxResults': '',
+            'maxLinks': '',
+            'sort': '',
+            'series': '',
+            'pageGrouping': '',
+            'mdayCnt': '0',
+            'selectDate': dt,
+            'textCrpCik': '',
+        }
+
+        res = self.session.post(URLS["DART_RECENT_LIST"], data=data, headers=HEADERS)
+        if res.status_code == 200:
+            sr = SearchRecentResult.parse(res.text)
+            return sr
+        else:
+            raise ValueError(f"status code is {res.status_code}")
 
 
 class DartAPI:
@@ -448,6 +510,20 @@ class DartAPI:
             'end_de': end_de
         }
         return requests.get("https://opendart.fss.or.kr/api/list.json", params=param).json()
+
+    def get_corp_info(self, save_dir="."):
+        key = self.keys.next_key()
+        logger.info(f"fetching corp info with key : {key}")
+        param = {
+            'crtfc_key': key
+        }
+        response = requests.get("https://opendart.fss.or.kr/api/corpCode.xml", params=param)
+        content_type = response.headers.get("Content-Type")
+        if "xml" in content_type:
+            print("Content-Type is XML")
+        elif "application/x-msdownload" in content_type:
+            z = zipfile.ZipFile(io.BytesIO(response.content))
+            z.extractall(save_dir)
 
     def get_document_zip_bytes(self, rcp_no):
         key = self.keys.next_key()
